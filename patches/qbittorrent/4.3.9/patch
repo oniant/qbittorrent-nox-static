@@ -1,0 +1,168 @@
+diff --git a/src/base/net/downloadmanager.cpp b/src/base/net/downloadmanager.cpp
+index 71fbf9f12..7b097ad30 100644
+--- a/src/base/net/downloadmanager.cpp
++++ b/src/base/net/downloadmanager.cpp
+@@ -293,10 +293,20 @@ void Net::DownloadManager::ignoreSslErrors(QNetworkReply *reply, const QList<QSs
+     QStringList errorList;
+     for (const QSslError &error : errors)
+         errorList += error.errorString();
+-    LogMsg(tr("Ignoring SSL error, URL: \"%1\", errors: \"%2\"").arg(reply->url().toString(), errorList.join(". ")), Log::WARNING);
+ 
+-    // Ignore all SSL errors
+-    reply->ignoreSslErrors();
++    QString errorMsg;
++    if (!Preferences::instance()->isIgnoreSSLErrors())
++    {
++        errorMsg = tr("SSL error, URL: \"%1\", errors: \"%2\"");
++    }
++    else
++    {
++        errorMsg = tr("Ignoring SSL error, URL: \"%1\", errors: \"%2\"");
++        // Ignore all SSL errors
++        reply->ignoreSslErrors();
++    }
++
++    LogMsg(errorMsg.arg(reply->url().toString(), errorList.join(". ")), Log::WARNING);
+ }
+ 
+ Net::DownloadRequest::DownloadRequest(const QString &url)
+diff --git a/src/base/preferences.cpp b/src/base/preferences.cpp
+index 868fd74db..8e1f1979b 100644
+--- a/src/base/preferences.cpp
++++ b/src/base/preferences.cpp
+@@ -1123,6 +1123,19 @@ void Preferences::setTrackerPort(const int port)
+     setValue("Preferences/Advanced/trackerPort", port);
+ }
+ 
++bool Preferences::isIgnoreSSLErrors() const
++{
++    return value("Preferences/Advanced/IgnoreSSLErrors", false).toBool();
++}
++
++void Preferences::setIgnoreSSLErrors(const bool enabled)
++{
++    if (enabled == isIgnoreSSLErrors())
++        return;
++
++    setValue("Preferences/Advanced/IgnoreSSLErrors", enabled);
++}
++
+ #if defined(Q_OS_WIN) || defined(Q_OS_MACOS)
+ bool Preferences::isUpdateCheckEnabled() const
+ {
+diff --git a/src/base/preferences.h b/src/base/preferences.h
+index 96313588c..4a58e943a 100644
+--- a/src/base/preferences.h
++++ b/src/base/preferences.h
+@@ -288,6 +288,8 @@ public:
+ #endif
+     int getTrackerPort() const;
+     void setTrackerPort(int port);
++    bool isIgnoreSSLErrors() const;
++    void setIgnoreSSLErrors(bool enabled);
+ #if defined(Q_OS_WIN) || defined(Q_OS_MACOS)
+     bool isUpdateCheckEnabled() const;
+     void setUpdateCheckEnabled(bool enabled);
+diff --git a/src/gui/advancedsettings.cpp b/src/gui/advancedsettings.cpp
+index 595f6ca8e..d86b30e41 100644
+--- a/src/gui/advancedsettings.cpp
++++ b/src/gui/advancedsettings.cpp
+@@ -88,6 +88,7 @@ namespace
+         // embedded tracker
+         TRACKER_STATUS,
+         TRACKER_PORT,
++        IGNORE_SSL_ERRORS,
+         // libtorrent section
+         LIBTORRENT_HEADER,
+         ASYNC_IO_THREADS,
+@@ -287,6 +288,8 @@ void AdvancedSettings::saveAdvancedSettings()
+     // Tracker
+     pref->setTrackerPort(m_spinBoxTrackerPort.value());
+     session->setTrackerEnabled(m_checkBoxTrackerStatus.isChecked());
++    // Ignore SSL errors
++    pref->setIgnoreSSLErrors(m_checkBoxIgnoreSSLErrors.isChecked());
+     // Choking algorithm
+     session->setChokingAlgorithm(static_cast<BitTorrent::ChokingAlgorithm>(m_comboBoxChokingAlgorithm.currentIndex()));
+     // Seed choking algorithm
+@@ -671,6 +674,10 @@ void AdvancedSettings::loadAdvancedSettings()
+     m_spinBoxTrackerPort.setMaximum(65535);
+     m_spinBoxTrackerPort.setValue(pref->getTrackerPort());
+     addRow(TRACKER_PORT, tr("Embedded tracker port"), &m_spinBoxTrackerPort);
++    // Ignore SSL errors
++    m_checkBoxIgnoreSSLErrors.setChecked(pref->isIgnoreSSLErrors());
++    m_checkBoxIgnoreSSLErrors.setToolTip(tr("Affects certificate validation and non-torrent protocol activities (e.g. RSS feeds, program updates, torrent files, geoip db, etc)"));
++    addRow(IGNORE_SSL_ERRORS, tr("Ignore SSL errors"), &m_checkBoxIgnoreSSLErrors);
+     // Choking algorithm
+     m_comboBoxChokingAlgorithm.addItems({tr("Fixed slots"), tr("Upload rate based")});
+     m_comboBoxChokingAlgorithm.setCurrentIndex(static_cast<int>(session->chokingAlgorithm()));
+diff --git a/src/gui/advancedsettings.h b/src/gui/advancedsettings.h
+index 04e6a2235..8a9b25e95 100644
+--- a/src/gui/advancedsettings.h
++++ b/src/gui/advancedsettings.h
+@@ -67,7 +67,7 @@ private:
+              m_spinBoxSavePathHistoryLength, m_spinBoxPeerTurnover, m_spinBoxPeerTurnoverCutoff, m_spinBoxPeerTurnoverInterval;
+     QCheckBox m_checkBoxOsCache, m_checkBoxRecheckCompleted, m_checkBoxResolveCountries, m_checkBoxResolveHosts,
+               m_checkBoxProgramNotifications, m_checkBoxTorrentAddedNotifications, m_checkBoxTrackerFavicon, m_checkBoxTrackerStatus,
+-              m_checkBoxConfirmTorrentRecheck, m_checkBoxConfirmRemoveAllTags, m_checkBoxAnnounceAllTrackers, m_checkBoxAnnounceAllTiers,
++              m_checkBoxIgnoreSSLErrors, m_checkBoxConfirmTorrentRecheck, m_checkBoxConfirmRemoveAllTags, m_checkBoxAnnounceAllTrackers, m_checkBoxAnnounceAllTiers,
+               m_checkBoxMultiConnectionsPerIp, m_checkBoxValidateHTTPSTrackerCertificate, m_checkBoxSSRFMitigation, m_checkBoxBlockPeersOnPrivilegedPorts, m_checkBoxPieceExtentAffinity,
+               m_checkBoxSuggestMode, m_checkBoxSpeedWidgetEnabled, m_checkBoxIDNSupport;
+     QComboBox m_comboBoxInterface, m_comboBoxInterfaceAddress, m_comboBoxUtpMixedMode, m_comboBoxChokingAlgorithm, m_comboBoxSeedChokingAlgorithm;
+diff --git a/src/webui/api/appcontroller.cpp b/src/webui/api/appcontroller.cpp
+index 9d1e5433c..8b1007a7a 100644
+--- a/src/webui/api/appcontroller.cpp
++++ b/src/webui/api/appcontroller.cpp
+@@ -335,6 +335,8 @@ void AppController::preferencesAction()
+     // Embedded tracker
+     data["enable_embedded_tracker"] = session->isTrackerEnabled();
+     data["embedded_tracker_port"] = pref->getTrackerPort();
++    // Ignore SSL errors
++    data["ignore_ssl_errors"] = pref->isIgnoreSSLErrors();
+     // Choking algorithm
+     data["upload_slots_behavior"] = static_cast<int>(session->chokingAlgorithm());
+     // Seed choking algorithm
+@@ -810,6 +812,9 @@ void AppController::setPreferencesAction()
+         pref->setTrackerPort(it.value().toInt());
+     if (hasKey("enable_embedded_tracker"))
+         session->setTrackerEnabled(it.value().toBool());
++    // Ignore SLL errors
++    if (hasKey("ignore_ssl_errors"))
++        pref->setIgnoreSSLErrors(it.value().toBool());
+     // Choking algorithm
+     if (hasKey("upload_slots_behavior"))
+         session->setChokingAlgorithm(static_cast<BitTorrent::ChokingAlgorithm>(it.value().toInt()));
+diff --git a/src/webui/www/private/views/preferences.html b/src/webui/www/private/views/preferences.html
+index fb710bcf8..14235ae1d 100644
+--- a/src/webui/www/private/views/preferences.html
++++ b/src/webui/www/private/views/preferences.html
+@@ -941,6 +941,14 @@
+                     <input type="text" id="embeddedTrackerPort" style="width: 15em;" />
+                 </td>
+             </tr>
++            <tr>
++                <td>
++                    <label for="ignoreSSLErrors">QBT_TR(Ignore SSL errors:)QBT_TR[CONTEXT=OptionsDialog]</label>
++                </td>
++                <td>
++                    <input type="checkbox" id="ignoreSSLErrors">
++                </td>
++            </tr>
+         </table>
+     </fieldset>
+     <fieldset class="settings">
+@@ -1920,6 +1928,7 @@
+                         $('blockPeersOnPrivilegedPorts').setProperty('checked', pref.block_peers_on_privileged_ports);
+                         $('enableEmbeddedTracker').setProperty('checked', pref.enable_embedded_tracker);
+                         $('embeddedTrackerPort').setProperty('value', pref.embedded_tracker_port);
++                        $("ignoreSSLErrors").setProperty("checked", pref.ignore_ssl_errors);
+                         $('uploadSlotsBehavior').setProperty('value', pref.upload_slots_behavior);
+                         $('uploadChokingAlgorithm').setProperty('value', pref.upload_choking_algorithm);
+                         $('announceAllTrackers').setProperty('checked', pref.announce_to_all_trackers);
+@@ -2282,6 +2291,7 @@
+             settings.set('save_resume_data_interval', $('saveResumeDataInterval').getProperty('value'));
+             settings.set('recheck_completed_torrents', $('recheckTorrentsOnCompletion').getProperty('checked'));
+             settings.set('resolve_peer_countries', $('resolvePeerCountries').getProperty('checked'));
++            settings.set('ignore_ssl_errors', $('ignoreSSLErrors').getProperty('checked'));
+ 
+             // libtorrent section
+             settings.set('async_io_threads', $('asyncIOThreads').getProperty('value'));
